@@ -1,15 +1,15 @@
 package com.example.exomusicplayerdemokt
 
+import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
-import android.os.AsyncTask
-import android.os.Bundle
-import android.os.Environment
+import android.os.*
 import android.os.Environment.DIRECTORY_MUSIC
-import android.os.ResultReceiver
-import android.support.v4.media.*
+import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
+import android.support.v4.media.MediaBrowserServiceCompat
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.MediaMetadataCompat.METADATA_KEY_DURATION
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
@@ -26,6 +26,7 @@ const val MY_MEDIA_ROOT_ID = "media_root_id"
 const val LOG_TAG = "MediaBrowserService"
 
 class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
+    private var position = 0;
     private var mediaSession: MediaSessionCompat? = null
     private lateinit var stateBuilder: PlaybackStateCompat.Builder
     private lateinit var mediaMetadata: ArrayList<MediaMetadataCompat>
@@ -45,8 +46,10 @@ class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
         // Create a MediaSessionCompat
         mediaSession = MediaSessionCompat(baseContext, LOG_TAG).apply {
             // Enable callbacks from MediaButtons and TransportControls
-            setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS
-                        or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
+            setFlags(
+                MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS
+                        or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+            )
             stateBuilder = PlaybackStateCompat.Builder()
                 .setActions(
                     PlaybackStateCompat.ACTION_PLAY
@@ -58,212 +61,159 @@ class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
                 )
             setPlaybackState(stateBuilder.build())
             setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPrepareFromMediaId(mediaId: String?, extras: Bundle?) {
+                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPrepareFromMediaId")
+                    prepareSource()
+                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_STOPPED, 0, 1f).build())
+                }
+
                 override fun onPlay() {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPlay")
+                    Log.d(
+                        LOG_TAG,
+                        "MediaSessionCompat.Callback onPlay currentWindowIndex ${exoPlayer.currentWindowIndex}"
+                    )
                     isActive = true
-
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPlay currentWindowIndex ${exoPlayer.currentWindowIndex}")
-                    if (exoPlayer.isLoading) {
-                        exoPlayer.seekTo(exoPlayer.currentWindowIndex,exoPlayer.currentPosition)
-                    } else {
-                        prepareSource();
-                    }
                     exoPlayer.playWhenReady = true
-
-                    //setMetadata()
-                    val mediaMetadataCompat = mediaMetadata[exoPlayer.currentWindowIndex]
-                    mediaMetadataCompat.bundle.putLong("total_time",exoPlayer.duration)
-                    mediaMetadataCompat.bundle.putLong("current_time",exoPlayer.currentPosition)
-                    setMetadata(mediaMetadataCompat)
+                    exoPlayer.seekTo(exoPlayer.currentWindowIndex, exoPlayer.currentPosition)
                     //setPlaybackState
-                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_PLAYING,0,1f).build())
+                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_PLAYING, 0, 1f).build())
+                    //setMetaData
+                    val metadataCompat = mediaMetadata[exoPlayer.currentWindowIndex]
+                    metadataCompat.bundle.putLong(METADATA_KEY_DURATION, exoPlayer.duration)
+                    setMetadata(metadataCompat)
+                    //Log.d(LOG_TAG, "MediaSessionCompat.Callback onPlay total_time ${exoPlayer.duration}")
                 }
 
                 override fun onPause() {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPause")
+                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPause currentWindowIndex ${exoPlayer.currentWindowIndex}")
                     exoPlayer.playWhenReady = false
-                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_PAUSED,0,1f).build())
+                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_PAUSED, 0, 1f).build())
                 }
 
                 override fun onStop() {
                     Log.d(LOG_TAG, "MediaSessionCompat.Callback onStop")
-                    exoPlayer.stop()
+                    exoPlayer.stop(true)
                     isActive = false
-                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_STOPPED,0,1f).build())
+                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_STOPPED, 0, 1f).build())
+                }
+
+                override fun onSkipToNext() {//见TimelineQueueNavigator.java的写法
+                    if (exoPlayer.hasNext()) {
+                        exoPlayer.seekTo(exoPlayer.nextWindowIndex, 0)
+                        exoPlayer.playWhenReady = true
+                        setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_SKIPPING_TO_NEXT, 0, 1f).build())
+                    }
+                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSkipToNext currentWindowIndex ${exoPlayer.currentWindowIndex}")
+
+                }
+
+                override fun onSkipToPrevious() {//见TimelineQueueNavigator.java的写法
+                    if (exoPlayer.hasPrevious()) {
+                        exoPlayer.seekTo(exoPlayer.previousWindowIndex, 0)
+                        exoPlayer.playWhenReady = true
+                        setPlaybackState(stateBuilder.setState(
+                            PlaybackStateCompat.STATE_SKIPPING_TO_PREVIOUS, 0, 1f).build()
+                        )
+                    }
+                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSkipToPrevious currentWindowIndex ${exoPlayer.currentWindowIndex}")
+
                 }
 
                 override fun onSkipToQueueItem(id: Long) {
-                    //Log.d(LOG_TAG, "MediaSessionCompat.Callback onSkipToQueueItem")
-                    exoPlayer.seekTo(id.toInt(),0)
-                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_SKIPPING_TO_QUEUE_ITEM,0,1f).build())
-                }
-
-
-                override fun onSkipToNext() {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSkipToNext isLoading:${exoPlayer.isLoading}")
-                    if (!exoPlayer.isLoading){
-                        prepareSource()
-                    }
-                    if (exoPlayer.hasNext()) {
-                        if (exoPlayer.isLoading){
-                            exoPlayer.next()
-                        }else{
-                            exoPlayer.seekTo(1,0)
-                        }
-                        setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_SKIPPING_TO_NEXT,0,1f).build())
-                    }
+                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSkipToQueueItem")
+                    exoPlayer.seekTo(id.toInt(), 0)
                     exoPlayer.playWhenReady = true
-
-                }
-
-                override fun onSkipToPrevious() {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSkipToPrevious")
-                    if (exoPlayer.hasPrevious()) {
-                        exoPlayer.previous()
-                        setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_SKIPPING_TO_PREVIOUS,0,1f).build())
-                    }
+                    setPlaybackState(
+                        stateBuilder.setState(
+                            PlaybackStateCompat.STATE_SKIPPING_TO_QUEUE_ITEM,
+                            0,
+                            1f
+                        ).build()
+                    )
                 }
 
                 override fun onSeekTo(pos: Long) {
                     Log.d(LOG_TAG, "MediaSessionCompat.Callback onSeekTo")
                     exoPlayer.seekTo(pos)
-                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_PLAYING,0,1f).build())
-                }
-
-                override fun onMediaButtonEvent(mediaButtonEvent: Intent?): Boolean {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onMediaButtonEvent")
-                    return onMediaButtonEvent(mediaButtonEvent)
-                }
-
-                override fun onAddQueueItem(description: MediaDescriptionCompat?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onAddQueueItem")
-                }
-
-                override fun onAddQueueItem(description: MediaDescriptionCompat?, index: Int) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onAddQueueItem")
-                }
-
-                override fun onCustomAction(action: String?, extras: Bundle?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onCustomAction")
-                }
-
-                override fun onPrepare() {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPrepare")
-                    super.onPrepare()
-                }
-
-                override fun onFastForward() {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onFastForward")
-                }
-
-                override fun onRemoveQueueItem(description: MediaDescriptionCompat?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onRemoveQueueItem")
-                }
-
-                override fun onPrepareFromMediaId(mediaId: String?, extras: Bundle?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPrepareFromMediaId")
-                }
-
-                override fun onSetRepeatMode(repeatMode: Int) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSetRepeatMode")
-                }
-
-                override fun onCommand(command: String?, extras: Bundle?, cb: ResultReceiver?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onCommand")
-                }
-
-                override fun onPrepareFromSearch(query: String?, extras: Bundle?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPrepareFromSearch")
-                }
-
-                override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPlayFromMediaId")
-                }
-
-                override fun onSetShuffleMode(shuffleMode: Int) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSetShuffleMode")
-                }
-
-                override fun onPrepareFromUri(uri: Uri?, extras: Bundle?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPrepareFromUri")
-                }
-
-                override fun onPlayFromSearch(query: String?, extras: Bundle?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPlayFromSearch")
-                }
-
-                override fun onPlayFromUri(uri: Uri?, extras: Bundle?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPlayFromUri")
-                }
-
-                override fun onSetRating(rating: RatingCompat?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSetRating")
-                }
-
-                override fun onSetRating(rating: RatingCompat?, extras: Bundle?) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSetRating")
-                }
-
-                override fun onSetCaptioningEnabled(enabled: Boolean) {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSetCaptioningEnabled")
-                }
-
-                override fun onRewind() {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onRewind")
+                    setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_PLAYING, 0, 1f).build())
                 }
             })
             // Set the session's token so that client activities can communicate with it.
             setSessionToken(sessionToken)
         }
     }
+    private var handler : Handler = @SuppressLint("HandlerLeak")
+    object :Handler(){
+        override fun handleMessage(msg: Message?) {
+
+        }
+    }
 
     private fun prepareSource() {
-        val dataSourceFactory = DefaultDataSourceFactory(applicationContext, Util.getUserAgent(applicationContext, "ExoMusicPlayerDemoKt"), null)
+        val dataSourceFactory = DefaultDataSourceFactory(
+            applicationContext,
+            Util.getUserAgent(applicationContext, "ExoMusicPlayerDemoKt"),
+            null
+        )
         val concatenatingMediaSource = ConcatenatingMediaSource()
         mediaMetadata.forEach {
             concatenatingMediaSource.addMediaSource(ExtractorMediaSource.Factory(dataSourceFactory).createMediaSource(it.description.mediaUri))
         }
         exoPlayer.addListener(object : Player.EventListener {
-            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters?) {
-                Log.d(LOG_TAG, "EventListener onPlaybackParametersChanged")
-            }
-            override fun onSeekProcessed() {
-                Log.d(LOG_TAG, "EventListener onSeekProcessed")
-            }
-            override fun onTracksChanged(trackGroups: TrackGroupArray?, trackSelections: TrackSelectionArray?) {
-                Log.d(LOG_TAG, "EventListener onTracksChanged")
-            }
-            override fun onPlayerError(error: ExoPlaybackException?) {
-                Log.d(LOG_TAG, "EventListener onPlayerError")
-            }
-            override fun onLoadingChanged(isLoading: Boolean) {
-                Log.d(LOG_TAG, "EventListener onLoadingChanged")
-            }
-            override fun onPositionDiscontinuity(reason: Int) {
-                Log.d(LOG_TAG, "EventListener onPositionDiscontinuity")
-            }
-            override fun onRepeatModeChanged(repeatMode: Int) {
-                Log.d(LOG_TAG, "EventListener onRepeatModeChanged")
-            }
-            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
-                Log.d(LOG_TAG, "EventListener onShuffleModeEnabledChanged")
-            }
             override fun onTimelineChanged(timeline: Timeline?, manifest: Any?, reason: Int) {
                 Log.d(LOG_TAG, "EventListener onTimelineChanged")
             }
+
             override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
                 Log.d(LOG_TAG, "EventListener onPlayerStateChanged: $playWhenReady $playbackState ")
+                if (playWhenReady && playbackState == PlaybackStateCompat.STATE_PLAYING){
+
+                }
+            }
+            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters?) {
+                Log.d(LOG_TAG, "EventListener onPlaybackParametersChanged")
+            }
+
+            override fun onSeekProcessed() {
+                Log.d(LOG_TAG, "EventListener onSeekProcessed")
+            }
+
+            override fun onTracksChanged(trackGroups: TrackGroupArray?, trackSelections: TrackSelectionArray?) {
+                Log.d(LOG_TAG, "EventListener onTracksChanged")
+            }
+
+            override fun onPlayerError(error: ExoPlaybackException?) {
+                Log.d(LOG_TAG, "EventListener onPlayerError")
+            }
+
+            override fun onLoadingChanged(isLoading: Boolean) {
+                Log.d(LOG_TAG, "EventListener onLoadingChanged")
+            }
+
+            override fun onPositionDiscontinuity(reason: Int) {
+                Log.d(LOG_TAG, "EventListener onPositionDiscontinuity")
+            }
+
+            override fun onRepeatModeChanged(repeatMode: Int) {
+                Log.d(LOG_TAG, "EventListener onRepeatModeChanged")
+            }
+
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+                Log.d(LOG_TAG, "EventListener onShuffleModeEnabledChanged")
             }
         })
+        exoPlayer.stop()
+        exoPlayer.playWhenReady = false
         exoPlayer.prepare(concatenatingMediaSource)
     }
 
     private fun sweepSongs() {
         ResolveTask(object : DataListener {
-        override fun dataGet(result: ArrayList<MediaMetadataCompat>) {
-            this@MediaBrowserServiceImpl.mediaMetadata = result
-        }
-    }).execute(baseContext)}
+            override fun dataGet(result: ArrayList<MediaMetadataCompat>) {
+                this@MediaBrowserServiceImpl.mediaMetadata = result
+            }
+        }).execute(baseContext)
+    }
 
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowserCompat.MediaItem>>) {
         if (mediaMetadata.isNullOrEmpty()) {
@@ -317,4 +267,10 @@ class ResolveTask(val listener: DataListener) : AsyncTask<Context, Void, ArrayLi
 
 interface DataListener {
     fun dataGet(result: ArrayList<MediaMetadataCompat>)
+}
+
+class SendTimerTask(totalTime:Long,currentTime:Long) : TimerTask() {
+    override fun run() {
+
+    }
 }

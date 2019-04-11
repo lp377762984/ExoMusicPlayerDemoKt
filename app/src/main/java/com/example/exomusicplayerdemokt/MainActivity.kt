@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.support.v4.app.ActivityCompat
 import android.support.v4.content.ContextCompat
 import android.support.v4.media.MediaBrowserCompat
+import android.support.v4.media.MediaDescriptionCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaControllerCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -19,15 +20,16 @@ import android.widget.Toast
 import kotlinx.android.synthetic.main.activity_main.*
 
 class MainActivity : AppCompatActivity() {
-    var TAG = "MainActivity"
+    var TAG = "MediaBrowserService"
     private lateinit var mediaBrowser: MediaBrowserCompat
     private lateinit var mediaController: MediaControllerCompat
     private lateinit var adapter: MusicAdapter
     private var position = 0;
     private var controllerCallback: MediaControllerCompat.Callback = object : MediaControllerCompat.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadataCompat?) {
-            Log.d(TAG, "onMetadataChanged")
-            val playbackState = mediaController.playbackState
+            val totalTime = metadata?.bundle?.getLong(MediaMetadataCompat.METADATA_KEY_DURATION)
+            //Log.d(TAG, "onMetadataChanged_total_time-->$totalTime")
+            seekBar.max = totalTime!!.toInt()
         }
 
         override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
@@ -69,6 +71,10 @@ class MainActivity : AppCompatActivity() {
                     super.onChildrenLoaded(parentId, children)
                     Log.d(TAG, "onChildrenLoaded")
                     adapter.setNewData(children)
+                    mediaController.transportControls.prepareFromMediaId(
+                        adapter.getItem(position)?.description?.mediaId,
+                        null
+                    )
                     tvPlaying.text = "暂停播放${adapter.getItem(position)?.description?.title}"
                 }
 
@@ -96,53 +102,86 @@ class MainActivity : AppCompatActivity() {
     private fun buildTransportControls() {
         mediaController = MediaControllerCompat.getMediaController(this@MainActivity)
         // Grab the view for the play/pause button
-        checkBox.setOnCheckedChangeListener(CompoundButton.OnCheckedChangeListener { buttonView, isChecked ->
-            if (isChecked) {
-                mediaController.transportControls.pause()
+        checkBox.setOnClickListener {
+            val state = mediaController.playbackState
+            if (state.isPrepared) {//已经准备好
+                if (!checkBox.isChecked) {
+                    mediaController.transportControls.play()
+                } else {
+                    mediaController.transportControls.pause()
+                }
             } else {
-                mediaController.transportControls.play()
-            }
-        })
-        btn_previous.setOnClickListener {//1
-            if (position>0){
-                position--
-                mediaController.transportControls.skipToPrevious()
-            }else{
-                Toast.makeText(this,"没有上一首了",Toast.LENGTH_SHORT).show()
+                mediaController.transportControls.prepareFromMediaId(
+                    adapter.getItem(position)?.description?.mediaId,
+                    null
+                )
             }
         }
-        btn_next.setOnClickListener {//1 2
-            if (position < adapter.itemCount - 1){
-                position++
-                mediaController.transportControls.skipToNext()
-            }else{
-                Toast.makeText(this,"没有下一首了",Toast.LENGTH_SHORT).show()
+        btn_previous.setOnClickListener {
+            if (position > 0) {
+                val state = mediaController.playbackState
+                if (state.isPrepared) {//已经准备好
+                    position--
+                    mediaController.transportControls.skipToPrevious()
+                } else {
+                    mediaController.transportControls.prepareFromMediaId(
+                        adapter.getItem(position)?.description?.mediaId,
+                        null
+                    )
+                }
+            } else {
+                Toast.makeText(this, "没有上一首了", Toast.LENGTH_SHORT).show()
             }
         }
-        // Display the initial state
-        val metadata = mediaController.metadata
-        val pbState = mediaController.playbackState
+        btn_next.setOnClickListener {
+            if (position < adapter.itemCount - 1) {
+                val state = mediaController.playbackState
+                if (state.isPrepared) {//已经准备{//已经准备好
+                    Log.d(TAG,"已经准备好")
+                    position++
+                    mediaController.transportControls.skipToNext()
+                } else {
+                    Log.d(TAG,"没准备好")
+                    mediaController.transportControls.prepareFromMediaId(
+                        adapter.getItem(position)?.description?.mediaId,
+                        null
+                    )
+                }
+            } else {
+                Toast.makeText(this, "没有下一首了", Toast.LENGTH_SHORT).show()
+            }
+        }
         // Register a Callback to stay in sync
         mediaController.registerCallback(controllerCallback)
         adapter = MusicAdapter(R.layout.music_item, null)
         adapter.setOnItemClickListener { adapter, view, position ->
-            //checkBox.isChecked = !checkBox.isChecked
             this@MainActivity.position = position
-            mediaController.transportControls.skipToQueueItem(position.toLong())
+            val state = mediaController.playbackState
+            if (state.isPrepared) {//已经准备
+                Log.d(TAG,"已经准备好")
+                mediaController.transportControls.skipToQueueItem(position.toLong())
+            } else {
+                Log.d(TAG,"没准备好")
+                val desc = adapter.getItem(position) as MediaBrowserCompat.MediaItem
+                mediaController.transportControls.prepareFromMediaId(desc.description.mediaId,null)
+            }
+
+
         }
         recyclerView.apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
             adapter = this@MainActivity.adapter
         }
-
-
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            // Should we show an explanation?
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.READ_EXTERNAL_STORAGE
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
             if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.READ_EXTERNAL_STORAGE)
             ) {
                 ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), 202)
