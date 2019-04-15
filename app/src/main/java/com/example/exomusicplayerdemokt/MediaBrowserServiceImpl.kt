@@ -24,13 +24,16 @@ import java.util.*
 
 const val MY_MEDIA_ROOT_ID = "media_root_id"
 const val LOG_TAG = "MediaBrowserService"
-
+const val CURRENTTIME ="currentTime"
+const val TOTALTIME = "totalTime"
 class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
-    private var position = 0;
     private var mediaSession: MediaSessionCompat? = null
     private lateinit var stateBuilder: PlaybackStateCompat.Builder
     private lateinit var mediaMetadata: ArrayList<MediaMetadataCompat>
-    private val uAmpAudioAttributes = com.google.android.exoplayer2.audio.AudioAttributes.Builder()
+    private val timer: Timer by lazy {
+        Timer()
+    }
+    private var uAmpAudioAttributes = com.google.android.exoplayer2.audio.AudioAttributes.Builder()
         .setContentType(C.CONTENT_TYPE_MUSIC)
         .setUsage(C.USAGE_MEDIA)
         .build()
@@ -77,15 +80,14 @@ class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
                     exoPlayer.seekTo(exoPlayer.currentWindowIndex, exoPlayer.currentPosition)
                     //setPlaybackState
                     setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_PLAYING, 0, 1f).build())
-                    //setMetaData
-                    val metadataCompat = mediaMetadata[exoPlayer.currentWindowIndex]
-                    metadataCompat.bundle.putLong(METADATA_KEY_DURATION, exoPlayer.duration)
-                    setMetadata(metadataCompat)
                     //Log.d(LOG_TAG, "MediaSessionCompat.Callback onPlay total_time ${exoPlayer.duration}")
                 }
 
                 override fun onPause() {
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onPause currentWindowIndex ${exoPlayer.currentWindowIndex}")
+                    Log.d(
+                        LOG_TAG,
+                        "MediaSessionCompat.Callback onPause currentWindowIndex ${exoPlayer.currentWindowIndex}"
+                    )
                     exoPlayer.playWhenReady = false
                     setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_PAUSED, 0, 1f).build())
                 }
@@ -101,9 +103,18 @@ class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
                     if (exoPlayer.hasNext()) {
                         exoPlayer.seekTo(exoPlayer.nextWindowIndex, 0)
                         exoPlayer.playWhenReady = true
-                        setPlaybackState(stateBuilder.setState(PlaybackStateCompat.STATE_SKIPPING_TO_NEXT, 0, 1f).build())
+                        setPlaybackState(
+                            stateBuilder.setState(
+                                PlaybackStateCompat.STATE_SKIPPING_TO_NEXT,
+                                0,
+                                1f
+                            ).build()
+                        )
                     }
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSkipToNext currentWindowIndex ${exoPlayer.currentWindowIndex}")
+                    Log.d(
+                        LOG_TAG,
+                        "MediaSessionCompat.Callback onSkipToNext currentWindowIndex ${exoPlayer.currentWindowIndex}"
+                    )
 
                 }
 
@@ -111,11 +122,16 @@ class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
                     if (exoPlayer.hasPrevious()) {
                         exoPlayer.seekTo(exoPlayer.previousWindowIndex, 0)
                         exoPlayer.playWhenReady = true
-                        setPlaybackState(stateBuilder.setState(
-                            PlaybackStateCompat.STATE_SKIPPING_TO_PREVIOUS, 0, 1f).build()
+                        setPlaybackState(
+                            stateBuilder.setState(
+                                PlaybackStateCompat.STATE_SKIPPING_TO_PREVIOUS, 0, 1f
+                            ).build()
                         )
                     }
-                    Log.d(LOG_TAG, "MediaSessionCompat.Callback onSkipToPrevious currentWindowIndex ${exoPlayer.currentWindowIndex}")
+                    Log.d(
+                        LOG_TAG,
+                        "MediaSessionCompat.Callback onSkipToPrevious currentWindowIndex ${exoPlayer.currentWindowIndex}"
+                    )
 
                 }
 
@@ -142,13 +158,25 @@ class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
             setSessionToken(sessionToken)
         }
     }
-    private var handler : Handler = @SuppressLint("HandlerLeak")
-    object :Handler(){
-        override fun handleMessage(msg: Message?) {
 
+    private var handler: Handler = @SuppressLint("HandlerLeak")
+    object : Handler() {
+        override fun handleMessage(msg: Message?) {
+            when(msg?.what){
+                0-> {
+                    val currentTime = exoPlayer.currentPosition
+                    val totalTime = exoPlayer.duration
+                    val mmc = mediaMetadata[exoPlayer.currentWindowIndex]
+                    Log.d(LOG_TAG,"send currentTime-->$currentTime*totalTime-->$totalTime")
+                    mmc.description.extras?.putLong(CURRENTTIME,currentTime)
+                    mmc.description.extras?.putLong(TOTALTIME,totalTime)
+                    //this@MediaBrowserServiceImpl.mediaSession?.setMetadata(mmc)
+                }
+            }
         }
     }
-
+    private var initTask =false
+    private lateinit var playInfo:PlayInfo
     private fun prepareSource() {
         val dataSourceFactory = DefaultDataSourceFactory(
             applicationContext,
@@ -166,10 +194,16 @@ class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
 
             override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
                 Log.d(LOG_TAG, "EventListener onPlayerStateChanged: $playWhenReady $playbackState ")
-                if (playWhenReady && playbackState == PlaybackStateCompat.STATE_PLAYING){
-
+                if (playWhenReady && !initTask) {//开始播放
+                    Log.d(LOG_TAG,"run schedule")
+                    playInfo = PlayInfo(0,0)
+                    timer.schedule(SendTimerTask(handler),0,1000)
+                    initTask = true
+                } else {//暂停播放
+                    //timer.cancel()
                 }
             }
+
             override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters?) {
                 Log.d(LOG_TAG, "EventListener onPlaybackParametersChanged")
             }
@@ -215,9 +249,14 @@ class MediaBrowserServiceImpl : MediaBrowserServiceCompat() {
         }).execute(baseContext)
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        timer.cancel()
+    }
+
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowserCompat.MediaItem>>) {
+        Log.d(LOG_TAG,"onLoadChildren")
         if (mediaMetadata.isNullOrEmpty()) {
-            result.detach()
             return
         }
         val mediaItems = mutableListOf<MediaBrowserCompat.MediaItem>()
@@ -269,8 +308,8 @@ interface DataListener {
     fun dataGet(result: ArrayList<MediaMetadataCompat>)
 }
 
-class SendTimerTask(totalTime:Long,currentTime:Long) : TimerTask() {
+class SendTimerTask(private val handler: Handler) : TimerTask() {
     override fun run() {
-
+        handler.sendEmptyMessage(0)
     }
 }
